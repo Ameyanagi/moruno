@@ -278,6 +278,97 @@ async fn native_fills_follow_grouped_fragments() -> Result<(), Box<dyn std::erro
 }
 
 #[tokio::test]
+async fn filled_abbreviations_expand_for_editable_exchange()
+-> Result<(), Box<dyn std::error::Error>> {
+    let engine = LocalEngine::default();
+    use reshiki::canvas_theme::{self, CanvasTheme};
+    for (mode, transparent_copy) in [
+        (CanvasTheme::Light, false),
+        (CanvasTheme::Dark, false),
+        (CanvasTheme::Dark, true),
+    ] {
+        let mut doc = ring();
+        doc.canvas_theme = mode;
+        let members = doc.all_ids();
+        ring_fills::apply(&mut doc, &members, Some([198, 233, 220]));
+        let anchor = members[0];
+        let outside = doc.add_atom(
+            "O",
+            doc.atom(anchor).ok_or("anchor")?.position.offset(0., -42.),
+        );
+        doc.add_bond(anchor, outside, 1, "plain");
+        doc.contract(&members, "Cy", "Cy")?;
+        doc.contract(&[outside], "OH", "HO")?;
+        doc.validate()?;
+        for format in ["cdxml", "cdx"] {
+            let source = if transparent_copy {
+                canvas_theme::for_paste(doc.clone(), CanvasTheme::Light)
+            } else {
+                doc.clone()
+            };
+            let mut request = Request::molecule("export", source);
+            request.format = Some(format.into());
+            let output = engine.request(request).await?.output.ok_or("export")?;
+            if format == "cdxml" {
+                let xml = roxmltree::Document::parse(&output)?;
+                let area = xml
+                    .descendants()
+                    .find(|n| n.has_tag_name("ColoredMolecularArea"))
+                    .ok_or("native fill")?;
+                let fragment = area.parent().ok_or("fill fragment")?;
+                assert!(fragment.has_tag_name("fragment"));
+                assert!(
+                    fragment
+                        .parent()
+                        .ok_or("fragment parent")?
+                        .has_tag_name("page")
+                );
+                let basis = area.attribute("BasisObjects").ok_or("basis")?;
+                for id in basis.split_whitespace() {
+                    assert!(
+                        fragment
+                            .children()
+                            .any(|n| n.has_tag_name("b") && n.attribute("id") == Some(id))
+                    );
+                }
+            }
+            let restored = engine
+                .request(Request::import(format, &output))
+                .await?
+                .document
+                .ok_or("import")?;
+            restored.validate()?;
+            assert_eq!((restored.atoms.len(), restored.bonds.len()), (7, 7));
+            assert_eq!(restored.abbreviations.len(), 1);
+            assert_eq!(restored.abbreviations[0].label, "OH");
+            assert_eq!(
+                doc.abbreviations.len(),
+                2,
+                "Export leaves the source contracted"
+            );
+            assert_eq!(restored.ring_fills.len(), 1);
+            let fill = &restored.ring_fills[0];
+            assert!(
+                fill.atoms
+                    .iter()
+                    .all(|id| !restored.abbreviations[0].members.contains(id))
+            );
+            assert_eq!(fill.color, ring_fills::palette_color([198, 233, 220], mode));
+            // File exports retain the dark page; clipboard copies contain no background.
+            assert_eq!(
+                restored.graphics.len(),
+                usize::from(mode.is_dark() && !transparent_copy)
+            );
+            let mut expanded = restored.clone();
+            let before = expanded.ring_fills[0].commands(&expanded);
+            expanded.translate(&[expanded.ring_fills[0].atoms[0]], 10., 5.);
+            assert_ne!(expanded.ring_fills[0].commands(&expanded), before);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn imports_actual_chemdraw_return_clipboard() -> Result<(), Box<dyn std::error::Error>> {
     let xml =
         reshiki::exchange::from_cdx(include_bytes!("fixtures/ring-fills/chemdraw-return.cdx"))?;

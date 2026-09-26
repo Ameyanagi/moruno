@@ -980,7 +980,7 @@ impl App {
             .push(text("Reference RGB → OKLCH\nL = lightness / 100\nC = reference C × intensity / 100\nh = reference h").size(12))
             .push(text(format!("Light: L = {:.2}, C = reference C × {:.2}\nDark: L = {:.2}, C = reference C × {:.2}",
                 editor.recipe.light.lightness, editor.recipe.light.chroma, editor.recipe.dark.lightness, editor.recipe.dark.chroma)).size(11).style(super::workspace::muted_text))
-            .push(text("Each mode uses its matching reference palette. C and H labels stay neutral. RGB conversion reduces chroma if needed; the contrast check can then adjust label lightness.").size(11).style(super::workspace::muted_text));
+            .push(text("Each mode uses its matching reference palette, with separate seeds for labels and interface tiles. C and H labels stay neutral. RGB conversion reduces chroma if needed; the contrast check can then adjust label lightness.").size(11).style(super::workspace::muted_text));
         let candidate = editor.candidate();
         let mut footer = column![].spacing(8);
         if let Err(error) = &candidate {

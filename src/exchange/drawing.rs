@@ -139,21 +139,22 @@ fn write_impl(
         ));
     }
     let haworth = crate::haworth::interchange::export_bonds(document).map_err(invalid)?;
-    // ChemDraw 26 discards nested MultiAttachment definitions when saving a
-    // Fragment label. Expand these groups for editable exchange so every real
-    // atom and target survives; native/figure output keeps the compact label.
-    let mut expanded;
-    let document = if document.abbreviations.iter().any(|g| {
+    // ChemDraw 26 discards native fills and MultiAttachment definitions inside
+    // Fragment labels. Expand only those groups for editable exchange; native
+    // documents and figure output retain their compact labels.
+    let needs_expansion = |g: &crate::abbreviations::Abbreviation| {
         g.members
             .iter()
             .any(|id| document.atom(*id).is_some_and(|a| a.attachment.is_some()))
-    }) {
-        expanded = document.clone();
-        expanded.abbreviations.retain(|g| {
-            !g.members
+            || document
+                .ring_fills
                 .iter()
-                .any(|id| document.atom(*id).is_some_and(|a| a.attachment.is_some()))
-        });
+                .any(|fill| fill.atoms.iter().all(|id| g.members.contains(id)))
+    };
+    let mut expanded;
+    let document = if document.abbreviations.iter().any(needs_expansion) {
+        expanded = document.clone();
+        expanded.abbreviations.retain(|g| !needs_expansion(g));
         &expanded
     } else {
         document
@@ -223,8 +224,10 @@ fn write_impl(
     }
     w.crossings(middle)?;
     w.groups()?;
-    w.ring_fills()?;
     w.abbreviations()?;
+    // Abbreviations move bonds into nested fragments. Native areas must be
+    // created beside their final bond owners.
+    w.ring_fills()?;
     if !document.ring_fills.is_empty() || document.canvas_theme.is_dark() {
         // Editable readers need a distinct stacking ordinal for every object.
         // Equal Z values on atoms/bonds can make an opaque fill cover them.

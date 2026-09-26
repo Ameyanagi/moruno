@@ -22,6 +22,11 @@ pub struct Reference {
     pub license: String,
     pub light: BTreeMap<String, ColorValue>,
     pub dark: BTreeMap<String, ColorValue>,
+    /// Separate tile roles; absent entries in older recipes inherit label seeds.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub light_tile_seeds: BTreeMap<String, ColorValue>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dark_tile_seeds: BTreeMap<String, ColorValue>,
 }
 impl Reference {
     pub fn capture(theme: &ThemeFile) -> Self {
@@ -41,6 +46,25 @@ impl Reference {
                 })
                 .collect()
         };
+        let tiles = |mode| {
+            crate::editing::ELEMENTS
+                .iter()
+                .filter_map(|&element| {
+                    theme
+                        .palette(mode)
+                        .tile_seeds
+                        .get(element)
+                        .cloned()
+                        .or_else(|| {
+                            theme
+                                .base
+                                .element_swatch(element, mode)
+                                .map(ColorValue::Rgb)
+                        })
+                        .map(|color| (element.into(), color))
+                })
+                .collect()
+        };
         Self {
             id: theme.id.clone(),
             name: theme.name.clone(),
@@ -49,13 +73,19 @@ impl Reference {
             license: theme.license.clone(),
             light: colors(CanvasTheme::Light),
             dark: colors(CanvasTheme::Dark),
+            light_tile_seeds: tiles(CanvasTheme::Light),
+            dark_tile_seeds: tiles(CanvasTheme::Dark),
         }
     }
     fn validate(&self) -> Result<(), String> {
         // Reuse the portable file's identity, credit, and color validators.
-        let palette = |elements: &BTreeMap<String, ColorValue>| crate::theme_files::Palette {
-            elements: elements.clone(),
-            ..Default::default()
+        let palette = |elements: &BTreeMap<String, ColorValue>,
+                       tile_seeds: &BTreeMap<String, ColorValue>| {
+            crate::theme_files::Palette {
+                elements: elements.clone(),
+                tile_seeds: tile_seeds.clone(),
+                ..Default::default()
+            }
         };
         ThemeFile {
             version: 1,
@@ -65,8 +95,8 @@ impl Reference {
             source: self.source.clone(),
             license: self.license.clone(),
             base: ColorTheme::Publication,
-            light: palette(&self.light),
-            dark: palette(&self.dark),
+            light: palette(&self.light, &self.light_tile_seeds),
+            dark: palette(&self.dark, &self.dark_tile_seeds),
             generator: None,
         }
         .validate()?;
@@ -83,6 +113,16 @@ impl Reference {
         })
         .get(element)
         .map(ColorValue::rgb)
+    }
+    fn tile_color(&self, element: &str, mode: CanvasTheme) -> Option<Rgb> {
+        (if mode.is_dark() {
+            &self.dark_tile_seeds
+        } else {
+            &self.light_tile_seeds
+        })
+        .get(element)
+        .map(ColorValue::rgb)
+        .or_else(|| self.color(element, mode))
     }
 }
 
@@ -179,26 +219,32 @@ impl Recipe {
             palette.elements.clear();
             palette.tile_seeds.clear();
             for &element in crate::editing::ELEMENTS {
-                let seed = self
-                    .reference
-                    .as_ref()
-                    .map_or_else(
-                        || jmol::swatch(element),
-                        |reference| reference.color(element, mode),
-                    )
-                    .map(|rgb| self.tone(mode).swatch(rgb));
+                let (seed, tile_seed) = self.reference.as_ref().map_or_else(
+                    || {
+                        let seed = jmol::swatch(element);
+                        (seed, seed)
+                    },
+                    |reference| {
+                        (
+                            reference.color(element, mode),
+                            reference.tile_color(element, mode),
+                        )
+                    },
+                );
                 let ink = if matches!(element, "C" | "H") {
                     mode.color([0; 3])
                 } else {
-                    seed.unwrap_or_else(|| mode.color([0; 3]))
+                    seed.map(|rgb| self.tone(mode).swatch(rgb))
+                        .unwrap_or_else(|| mode.color([0; 3]))
                 };
                 palette
                     .elements
                     .insert(element.into(), ColorValue::Rgb(ink));
-                if let Some(seed) = seed {
-                    palette
-                        .tile_seeds
-                        .insert(element.into(), ColorValue::Rgb(seed));
+                if let Some(seed) = tile_seed {
+                    palette.tile_seeds.insert(
+                        element.into(),
+                        ColorValue::Rgb(self.tone(mode).swatch(seed)),
+                    );
                 }
             }
         }

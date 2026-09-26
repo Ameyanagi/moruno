@@ -64,7 +64,6 @@ impl State {
         };
         let mut themes: Vec<_> = entries
             .flatten()
-            .take(256)
             .filter(|e| e.path().extension().is_some_and(|x| x == "reshiki-theme"))
             .filter_map(|e| theme_files::load(&e.path()).ok().map(|t| (e.path(), t)))
             .collect();
@@ -266,6 +265,32 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn library_reload_keeps_all_saved_themes_among_unrelated_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut theme = theme_files::bundled().unwrap().remove(0);
+        for index in 0..300 {
+            std::fs::write(dir.path().join(format!("notes-{index}.txt")), "notes").unwrap();
+            theme.id = format!("saved-{index}");
+            theme_files::save(
+                &dir.path().join(format!("{}.reshiki-theme", theme.id)),
+                &theme,
+            )
+            .unwrap();
+        }
+        std::fs::write(dir.path().join("broken.reshiki-theme"), "not JSON").unwrap();
+        let mut state = State::default();
+        state.load_from(dir.path());
+        assert_eq!(state.themes().len(), 300);
+        for index in 0..300 {
+            assert!(
+                state
+                    .themes()
+                    .iter()
+                    .any(|t| t.id == format!("saved-{index}"))
+            );
+        }
+    }
     #[test]
     fn deletion_survives_reload_and_archives_all_copies_of_only_the_selected_theme() {
         let dir = tempfile::tempdir().unwrap();

@@ -299,9 +299,7 @@ impl Writer<'_> {
             .map(|(b, &node)| ((b.a.min(b.b), b.a.max(b.b)), node))
             .collect();
         for fill in &self.doc.ring_fills {
-            if fill.commands(self.doc).is_empty() {
-                continue;
-            }
+            // Serialize validated ownership, independent of canvas visibility.
             let mut basis = Vec::new();
             let mut parent = None;
             for (&a, &b) in fill.atoms.iter().zip(fill.atoms.iter().cycle().skip(1)) {

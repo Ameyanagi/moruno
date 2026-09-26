@@ -197,6 +197,87 @@ fn boosted_chroma_exceeds_the_reference_without_changing_target_lightness_or_hue
 }
 
 #[test]
+fn reference_generation_preserves_distinct_label_and_tile_hues() {
+    let mut source = theme_files::bundled().unwrap().remove(0);
+    source.dark.tile_seeds.insert(
+        "N".into(),
+        theme_files::ColorValue::Oklch {
+            oklch: [0.72, 0.10, 145.],
+        },
+    );
+    let recipe = Recipe {
+        reference: Some(Reference::capture(&source)),
+        ..Recipe::PASTEL
+    };
+    let generated = recipe.generate(&source).unwrap();
+    for mode in CanvasTheme::ALL {
+        for element in ["N", "O", "Cl"] {
+            let label = source
+                .palette(mode)
+                .elements
+                .get(element)
+                .map(|v| v.rgb())
+                .unwrap_or_else(|| source.base.element_color(element, mode));
+            let tile = source.element_swatch(element, mode).unwrap();
+            let check_tone = |original, actual| {
+                let original = Oklch::from_rgb(original);
+                let actual = Oklch::from_rgb(actual);
+                assert!(
+                    (actual.h - original.h).abs() < 0.035,
+                    "{mode}/{element}: hue changed"
+                );
+                assert!((actual.c - original.c * recipe.tone(mode).chroma).abs() < 0.003);
+                assert!((actual.l - recipe.tone(mode).lightness).abs() < 0.003);
+            };
+            check_tone(label, generated.palette(mode).elements[element].rgb());
+            check_tone(tile, generated.element_swatch(element, mode).unwrap());
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("reference.reshiki-theme");
+    theme_files::save(&path, &generated).unwrap();
+    let loaded = theme_files::load(&path).unwrap();
+    assert_eq!(loaded.generator, Some(recipe.clone()));
+    assert_eq!(
+        loaded
+            .generator
+            .as_ref()
+            .unwrap()
+            .generate(&loaded)
+            .unwrap(),
+        generated
+    );
+    let mut legacy = serde_json::to_value(&recipe).unwrap();
+    let reference = legacy["reference"].as_object_mut().unwrap();
+    reference.remove("light_tile_seeds");
+    reference.remove("dark_tile_seeds");
+    let legacy: Recipe = serde_json::from_value(legacy).unwrap();
+    let old = legacy.generate(&source).unwrap();
+    for mode in CanvasTheme::ALL {
+        assert_eq!(
+            old.palette(mode).tile_seeds["N"],
+            old.palette(mode).elements["N"]
+        );
+    }
+    let mut invalid = recipe.clone();
+    invalid
+        .reference
+        .as_mut()
+        .unwrap()
+        .light_tile_seeds
+        .insert("Xx".into(), theme_files::ColorValue::Rgb([0; 3]));
+    assert!(invalid.validate().is_err());
+    let mut invalid = recipe;
+    invalid.reference.as_mut().unwrap().dark_tile_seeds.insert(
+        "N".into(),
+        theme_files::ColorValue::Oklch {
+            oklch: [0.5, -1., 10.],
+        },
+    );
+    assert!(invalid.validate().is_err());
+}
+
+#[test]
 fn references_use_each_modes_own_colors_and_survive_portable_roundtrip() {
     let mut source = ThemeFile::capture(&Document::default());
     source.id = "test-reference".into();
